@@ -5,7 +5,7 @@ import pandas as pd
 
 from datetime import datetime, timedelta
 from airflow import DAG
-from airflow.operators.python_operator import PythonOperator, BranchPythonOperator
+from airflow.operators.python_operator import PythonOperator
 from airflow.providers.postgres.operators.postgres import PostgresOperator
 from airflow.providers.postgres.hooks.postgres import PostgresHook
 from airflow.hooks.http_hook import HttpHook
@@ -16,11 +16,11 @@ base_url = http_conn_id.host
 
 postgres_conn_id = 'postgresql_de'
 
-nickname ='evgeny_verbov' 
+NICKNAME ='evgeny_verbov' 
 cohort = '20'
 
 headers = {
-    'X-Nickname': nickname,
+    'X-NICKNAME': NICKNAME,
     'X-Cohort': cohort,
     'X-Project': 'True',
     'X-API-KEY': api_key,
@@ -56,7 +56,7 @@ def get_report(ti):
             time.sleep(10)
 
     if not report_id:
-        raise TimeoutError()
+        raise TimeoutError('Timeout error, no servers responce')
 
     ti.xcom_push(key='report_id', value=report_id)
     print(f'Report_id={report_id}')
@@ -81,7 +81,7 @@ def get_increment(date, ti):
 
 def upload_data_to_staging(filename, date, pg_table, pg_schema, ti):
     increment_id = ti.xcom_pull(key='increment_id')
-    s3_filename = f'https://storage.yandexcloud.net/s3-sprint3/cohort_{cohort}/{nickname}/project/{increment_id}/{filename}'
+    s3_filename = f'https://storage.yandexcloud.net/s3-sprint3/cohort_{cohort}/{NICKNAME}/project/{increment_id}/{filename}'
     print(s3_filename)
     local_filename = date.replace('-', '') + '_' + filename
     print(local_filename)
@@ -90,8 +90,7 @@ def upload_data_to_staging(filename, date, pg_table, pg_schema, ti):
     open(f"{local_filename}", "wb").write(response.content)
     print(response.content)
 
-    df = pd.read_csv(local_filename)
-    df=df.drop('id', axis=1)
+    df = pd.read_csv(local_filename, index_col=0)
     df=df.drop_duplicates(subset=['uniq_id'])
 
     if 'status' not in df.columns:
@@ -115,7 +114,7 @@ args = {
     'email': ['student@example.com'],
     'email_on_failure': False,
     'email_on_retry': False,
-    'retries': 0
+    'retries': 3
 }
 
 business_dt = '{{ ds }}'
@@ -149,20 +148,15 @@ with DAG(
                    'pg_table': 'user_order_log',
                    'pg_schema': 'staging'})
 
-    update_d_item_table = PostgresOperator(
-        task_id='update_d_item',
+dimension_tasks = list()    
+for i in ['d_item', 'd_customer','d_city'],:
+    dimension_tasks.append(PostgresOperator(
+        task_id = f'update_{i}',
         postgres_conn_id=postgres_conn_id,
-        sql="sql/mart.d_item.sql")
-
-    update_d_customer_table = PostgresOperator(
-        task_id='update_d_customer',
-        postgres_conn_id=postgres_conn_id,
-        sql="sql/mart.d_customer.sql")
-
-    update_d_city_table = PostgresOperator(
-        task_id='update_d_city',
-        postgres_conn_id=postgres_conn_id,
-        sql="sql/mart.d_city.sql")
+        sql = f'sql/mart.{i}.sql',
+        dag = dag
+        )
+    ) 
 
     update_f_sales = PostgresOperator(
         task_id='update_f_sales',
@@ -176,13 +170,15 @@ with DAG(
         sql="sql/mart.f_customer_retention.sql",
         parameters={"date": {business_dt}}
     )
+    
+
 
     (
             generate_report
             >> get_report
             >> get_increment
             >> upload_user_order_inc
-            >> [update_d_item_table, update_d_city_table, update_d_customer_table]
+            >> dimension_tasks
             >> update_f_sales
             >> update_f_customer_retention
     )

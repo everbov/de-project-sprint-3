@@ -1,19 +1,3 @@
-create table if not exists mart.f_customer_retention ( 
-	new_customers_count bigint,--
-	returning_customers_count bigint,
-	refunded_customer_count bigint,
-	period_name varchar(10),
-	period_id int,
-	item_id int,
-	new_customers_revenue numeric(14, 2),
-	returning_customers_revenue numeric(14, 2),
-	customers_refunded bigint, 
-	UNIQUE(period_id, item_id)
-);
-
-delete from mart.f_customer_retention mcr
-where mcr.period_id=DATE_PART('week','{{ds}}'::timestamp);
-
 with temp1 as (select fsl.*,  dc.week_of_year,  
 case when fsl.payment_amount<0 then 'refunded' 
 	else 'shipped' end as status from mart.f_sales fsl
